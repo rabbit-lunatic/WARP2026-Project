@@ -21,9 +21,9 @@
 *                                                                          *
 |**************************************************************************|
 *                                                                          *
-*   Author(s)     : Shakto, Neo-Mind                                       *
+*   Author(s)     : Shakto, Neo-Mind, Victor Hugo                          *
 *   Created Date  : 2020-11-08                                             *
-*   Last Modified : 2024-08-08                                             *
+*   Last Modified : 2026-06-11                                             *
 *                                                                          *
 \**************************************************************************/
 
@@ -100,7 +100,22 @@ CustomEncKeys = function(_)
 ///
 /// \brief Disable for unsupported clients
 ///
-CustomEncKeys.validate = HasPktKeys;
+CustomEncKeys.validate = () =>
+{
+	if (!HasPktKeys())
+		return false;
+
+	try
+	{
+		PACKET.load();
+	}
+	catch (_)
+	{
+		return false;
+	}
+
+	return PACKET.KS_Type !== PACKET.Unknown && PACKET.Keys !== null;
+};
 
 ///
 /// \brief Clear the key assignment & Re-stage the changes if necessary
