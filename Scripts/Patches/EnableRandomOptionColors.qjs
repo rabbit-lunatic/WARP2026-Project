@@ -1,0 +1,203 @@
+/**************************************************************************\
+*                                                                          *
+*   Copyright (C) 2026 KWDev                                               *
+*                                                                          *
+*   This file is a part of WARP project (specific to RO clients)           *
+*                                                                          *
+*   WARP is free software: you can redistribute it and/or modify           *
+*   it under the terms of the GNU General Public License as published by   *
+*   the Free Software Foundation, either version 3 of the License, or      *
+*   (at your option) any later version.                                    *
+*                                                                          *
+*   This program is distributed in the hope that it will be useful,        *
+*   but WITHOUT ANY WARRANTY; without even the implied warranty of         *
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the          *
+*   GNU General Public License for more details.                           *
+*                                                                          *
+\**************************************************************************/
+
+/**************************************************************************\
+*                                                                          *
+*   Author(s)     : KWDev, Victor Hugo                                     *
+*   Created Date  : 2026-04-14                                             *
+*   Last Modified : 2026-06-13                                             *
+*                                                                          *
+\**************************************************************************/
+
+///
+/// \brief Enables ^RRGGBB / ^b / ^/b parsing for Random Option lines built
+///        from AddRandomOptionNameTable.lub by replacing the specific
+///        tooltip width-measure and draw callsites with wrappers.
+///
+EnableRandomOptionColors = function(_)
+{
+	_ = _ ?? "EnableRandomOptionColors";
+
+	$$(_, 1.1, `Find Random Option tooltip callsites and native helpers`)
+	const sites = EnableRandomOptionColors.findSites();
+	if (!sites)
+		throw Error("Unsupported client or patch already applied");
+
+	$$(_, 1.2, `Build the measurement wrapper using resolved native addresses`)
+	const measureStub = EnableRandomOptionColors.patchAddrs(
+		EnableRandomOptionColors.MeasureStub,
+		{
+			" D0 AA A0 00" : sites.measureTargetVir
+		}
+	);
+
+	$$(_, 1.3, `Build the draw wrapper using resolved native addresses`)
+	const drawStub = EnableRandomOptionColors.patchAddrs(
+		EnableRandomOptionColors.DrawStub,
+		{
+			" 30 79 4D 00" : sites.stringCtorVir,
+			" 20 E3 A0 00" : sites.colorDrawTargetVir,
+			" F0 2E 4E 00" : sites.stringDtorVir,
+			" 80 E2 A0 00" : sites.plainDrawTargetVir
+		}
+	);
+
+	$$(_, 1.4, `Allocate the measurement wrapper`)
+	const [, measureVir] = Exe.AddHex(measureStub, 0x10);
+
+	$$(_, 1.5, `Allocate the draw wrapper`)
+	const [, drawVir] = Exe.AddHex(drawStub, 0x10);
+
+	$$(_, 2.1, `Redirect width calculation to wrapper that strips color tags before measuring`)
+	Exe.SetCALL(sites.measureCall, measureVir);
+
+	$$(_, 2.2, `Redirect draw call to wrapper that routes colored strings into the color-aware renderer`)
+	Exe.SetCALL(sites.drawCall, drawVir);
+
+	return true;
+};
+
+EnableRandomOptionColors.findSites = () =>
+{
+	const measurePrefix =
+		" 8D 45 08 83 7D 1C 10 6A 00 0F 43 45 08 6A 00 6A 0C 6A 00 6A 00 50";
+	const measurePattern =
+		measurePrefix
+	+	" E8 ?? ?? ?? ?? 39 45 20 7C 17";
+
+	const drawPrefix =
+		" 6A 00 6A 00 6A 00 6A 0C 6A 00 6A 00 50 8B 45 D4 03 C3 50 6A 0C";
+	const drawPattern =
+		drawPrefix
+	+	" E8 ?? ?? ?? ?? 8B 06 83 C3 0B";
+
+	const stringCtorPattern =
+		" 55 8B EC 8B 55 08 8B C2 56 8B F1 57 8D 78 01"
+	+	" C7 06 00 00 00 00 C7 46 10 00 00 00 00 C7 46 14 0F 00 00 00"
+	+	" 8A 08 40 84 C9 75 F9 2B C7 8B CE 50 52 E8 ?? ?? ?? ??"
+	+	" 5F 8B C6 5E 5D C2 04 00";
+
+	const stringDtorPattern =
+		" 55 8B EC 6A FF 68 ?? ?? ?? ?? 64 A1 00 00 00 00 50 56"
+	+	" A1 ?? ?? ?? ?? 33 C5 50 8D 45 F4 64 A3 00 00 00 00"
+	+	" 8B F1 8B 4E 14 83 F9 10 72 27 8B 06 41 81 F9 00 10 00 00"
+	+	" 72 12 8B 50 FC 83 C1 23 2B C2";
+
+	const colorDrawPattern =
+		" 55 8B EC 6A FF 68 ?? ?? ?? ?? 64 A1 00 00 00 00 50 83 EC 14"
+	+	" 53 56 57 A1 ?? ?? ?? ?? 33 C5 50 8D 45 F4 64 A3 00 00 00 00"
+	+	" 8B D9 89 5D F0 6A 20 C7 45 E8 00 00 00 00"
+	+	" C7 45 EC 00 00 00 00 E8";
+
+	const measureTargetPattern =
+		" 55 8B EC 6A FF 68 ?? ?? ?? ?? 64 A1 00 00 00 00 50 83 EC 28"
+	+	" 56 57 A1 ?? ?? ?? ?? 33 C5 50 8D 45 F4 64 A3 00 00 00 00"
+	+	" 8B D1 8B 7D 08 85 FF 74 76 8B 75 0C 85 F6 75 14";
+
+	const plainDrawTargetPattern =
+		" 55 8B EC 6A FF 68 ?? ?? ?? ?? 64 A1 00 00 00 00 50 83 EC 20"
+	+	" 56 A1 ?? ?? ?? ?? 33 C5 50 8D 45 F4 64 A3 00 00 00 00"
+	+	" 8B 75 14 85 F6 75 0F 8B 75 10 8D 56 01 8A 06 46 84 C0 75 F9"
+	+	" 2B F2 FF 71 24 8D";
+
+	const measureAddr = EnableRandomOptionColors.findUnique(measurePattern, "Random Option measure callsite");
+	const drawAddr = EnableRandomOptionColors.findUnique(drawPattern, "Random Option draw callsite");
+	const stringCtorPhy = EnableRandomOptionColors.findUnique(stringCtorPattern, "std::string assign/construct helper");
+	const stringDtorPhy = EnableRandomOptionColors.findUnique(stringDtorPattern, "std::string destructor helper");
+	const colorDrawTargetPhy = EnableRandomOptionColors.findUnique(colorDrawPattern, "color-aware text renderer");
+
+	const measureCall = measureAddr + measurePrefix.byteCount();
+	const drawCall = drawAddr + drawPrefix.byteCount();
+	const measureTargetVir = Exe.GetTgtAddr(measureCall + 1);
+	const plainDrawTargetVir = Exe.GetTgtAddr(drawCall + 1);
+
+	if (!EnableRandomOptionColors.targetStartsWith(measureTargetVir, measureTargetPattern))
+		return null;
+
+	if (!EnableRandomOptionColors.targetStartsWith(plainDrawTargetVir, plainDrawTargetPattern))
+		return null;
+
+	return {
+		measureCall        : measureCall,
+		drawCall           : drawCall,
+		measureTargetVir   : measureTargetVir,
+		plainDrawTargetVir : plainDrawTargetVir,
+		stringCtorVir      : Exe.Phy2Vir(stringCtorPhy, CODE),
+		stringDtorVir      : Exe.Phy2Vir(stringDtorPhy, CODE),
+		colorDrawTargetVir : Exe.Phy2Vir(colorDrawTargetPhy, CODE)
+	};
+};
+
+EnableRandomOptionColors.findUnique = (pattern, label) =>
+{
+	const addrs = Exe.FindHexN(pattern, CODE);
+	if (addrs.length !== 1)
+		throw Error(`${label} not found uniquely`);
+
+	return addrs[0];
+};
+
+EnableRandomOptionColors.targetStartsWith = (targetVir, pattern) =>
+{
+	const targetPhy = Exe.Vir2Phy(targetVir, CODE);
+	if (targetPhy < 0)
+		return false;
+
+	return Exe.FindHex(pattern, targetPhy, targetPhy + pattern.byteCount()) === targetPhy;
+};
+
+EnableRandomOptionColors.patchAddrs = (hex, replacements) =>
+{
+	for (const [placeholder, value] of Object.entries(replacements))
+		hex = hex.split(placeholder).join(" " + value.toHex(4));
+
+	return hex;
+};
+
+EnableRandomOptionColors.validate = () =>
+	EnableRandomOptionColors.findSites() != null;
+
+EnableRandomOptionColors.MeasureStub =
+	  " 55 89 E5 53 56 57 81 EC 50 02 00 00 89 8D BC FD FF FF 8B 75 08 85 F6 0F"
+	+ " 84 6D 01 00 00 8B 4D 0C 85 C9 75 0C 31 C9 8A 04 0E 84 C0 74 03 41 EB F6"
+	+ " 31 C0 39 C8 0F 83 50 01 00 00 80 3C 06 5E 74 03 40 EB EF 31 DB 31 D2 8D"
+	+ " BD C0 FD FF FF 39 CB 0F 83 0E 01 00 00 81 FA 3F 02 00 00 0F 83 02 01 00"
+	+ " 00 8A 04 1E 3C 5E 0F 85 EA 00 00 00 89 C8 29 D8 83 F8 02 0F 82 DD 00 00"
+	+ " 00 8A 44 1E 01 3C 62 0F 84 C1 00 00 00 3C 2F 75 18 89 C8 29 D8 83 F8 03"
+	+ " 0F 82 C0 00 00 00 80 7C 1E 02 62 0F 84 AD 00 00 00 89 C8 29 D8 83 F8 07"
+	+ " 0F 82 A8 00 00 00 8A 44 1E 01 3C 30 0F 82 9C 00 00 00 3C 39 76 12 0C 20"
+	+ " 3C 61 0F 82 8E 00 00 00 3C 66 0F 87 86 00 00 00 8A 44 1E 02 3C 30 72 7E"
+	+ " 3C 39 76 0A 0C 20 3C 61 72 74 3C 66 77 70 8A 44 1E 03 3C 30 72 68 3C 39"
+	+ " 76 0A 0C 20 3C 61 72 5E 3C 66 77 5A 8A 44 1E 04 3C 30 72 52 3C 39 76 0A"
+	+ " 0C 20 3C 61 72 48 3C 66 77 44 8A 44 1E 05 3C 30 72 3C 3C 39 76 0A 0C 20"
+	+ " 3C 61 72 32 3C 66 77 2E 8A 44 1E 06 3C 30 72 26 3C 39 76 0A 0C 20 3C 61"
+	+ " 72 1C 3C 66 77 18 83 C3 07 E9 07 FF FF FF 83 C3 02 E9 FF FE FF FF 83 C3"
+	+ " 03 E9 F7 FE FF FF 8A 04 1E 88 04 17 43 42 E9 EA FE FF FF C6 04 17 00 8B"
+	+ " 8D BC FD FF FF FF 75 1C FF 75 18 FF 75 14 FF 75 10 52 8D 85 C0 FD FF FF"
+	+ " 50 B8 D0 AA A0 00 FF D0 EB 1F 8B 8D BC FD FF FF FF 75 1C FF 75 18 FF 75"
+	+ " 14 FF 75 10 FF 75 0C FF 75 08 B8 D0 AA A0 00 FF D0 81 C4 50 02 00 00 5F"
+	+ " 5E 5B 5D C2 18 00";
+
+EnableRandomOptionColors.DrawStub =
+	  " 55 89 E5 53 56 57 83 EC 18 89 CF 8B 75 10 85 F6 74 5E 8B 4D 14 85 C9 75"
+	+ " 0C 31 C9 8A 04 0E 84 C0 74 03 41 EB F6 31 C0 39 C8 73 45 80 3C 06 5E 74"
+	+ " 03 40 EB F3 8D 4D DC 56 B8 30 79 4D 00 FF D0 89 F9 6A 00 6A 00 6A 0C 6A"
+	+ " 00 6A 00 6A 00 6A 00 8D 45 DC 50 FF 75 0C FF 75 08 B8 20 E3 A0 00 FF D0"
+	+ " 89 C3 8D 4D DC B8 F0 2E 4E 00 FF D0 89 D8 EB 24 89 F9 FF 75 28 FF 75 24"
+	+ " FF 75 20 FF 75 1C FF 75 18 FF 75 14 FF 75 10 FF 75 0C FF 75 08 B8 80 E2"
+	+ " A0 00 FF D0 83 C4 18 5F 5E 5B 5D C2 24 00";

@@ -211,6 +211,12 @@ CustomUI:
             recommend : no
             author : CH.C (jchcc)
             desc : Fix item description '[' bug
+
+        - EnableRandomOptionColors:
+            title : Enable colors in Random Options
+            recommend : no
+            author : KWDev, Victor Hugo
+            desc : Makes Random Option lines interpret <b>^RRGGBB</b> color tags from <b>AddRandomOptionNameTable.lub</b> instead of showing them as literal text. Includes width handling so the tags do not expand the tooltip layout.
         
         - NoEquipPreview:
             title : Disable equipment preview
