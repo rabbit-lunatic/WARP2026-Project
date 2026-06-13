@@ -1,6 +1,6 @@
 # Ignore Outputs folder and everything inside
-/Outputs/
+#/Outputs/
 
 # Ignore root-level config files
-/Settings.yml
+#/Settings.yml
 /LastSession.yml
