@@ -23,7 +23,7 @@
 *                                                                          *
 *   Author(s)     : CH.C (jchcc), Neo-Mind, Victor Hugo                    *
 *   Created Date  : 2021-01-14                                             *
-*   Last Modified : 2026-06-10                                             *
+*   Last Modified : 2026-06-14                                             *
 *                                                                          *
 \**************************************************************************/
 
@@ -133,6 +133,12 @@ NewButtonVis = function(_)
 		const name = this.Data.get(k);
 		if (name) IDMap.set(name, v);
 		}
+
+		const ReputeInitIdSig = '20 02 00 00 37 02 00 00 45 02 00 00 4B 02 00 00';
+		let ReputeInitIdPhy = Exe.FindHex(ReputeInitIdSig, 0, Exe.FileSize);
+		if (ReputeInitIdPhy >= 0)
+			ReputeInitIdPhy += 4;
+
 		$$(_, 2.1, `Find the Jump table used for switch`)
 		let prefix = MOVZX(EAX, BYTE_PTR, [EAX, POS4WC]); //movzx eax, byte ptr [eax + switchTbl]
 		let suffix = JMP([4, EAX, POS4WC]);               //jmp dword ptr [eax*4 + jumpTbl]
@@ -215,7 +221,8 @@ NewButtonVis = function(_)
 				Visible,
 				Hidden,
 				MinLimit,
-				Range
+				Range,
+				ReputeInitIdPhy
 			});
 		}
 		else
@@ -354,7 +361,8 @@ NewButtonVis = function(_)
 				OffIDs,
 				IDReg,
 				Visible,
-				Hidden
+				Hidden,
+				ReputeInitIdPhy
 			});
 		}
 	}
@@ -416,6 +424,16 @@ NewButtonVis.stage = function(patchName)
 	const Refs = CACHE.get('NBV_Refs');
 
 	const {Type, IDMap, IDReg, TblAddrs} = Refs;
+	const ReputeName = this.Data.get('repute');
+	const HideSelection = CACHE.get('Selection:' + this.Members[0]);
+	const ShowSelection = CACHE.get('Selection:' + this.Members[1]);
+	if (Refs.ReputeInitIdPhy >= 0 && ReputeName)
+	{
+		if (HideSelection && HideSelection.includes(ReputeName))
+			Exe.SetUint32(Refs.ReputeInitIdPhy, 0x0258);
+		else if (ShowSelection && ShowSelection.includes(ReputeName))
+			Exe.SetUint32(Refs.ReputeInitIdPhy, 0x0237);
+	}
 
 	$$(_, 2.2, `Iterate through the current selection and change the value in table or add corresponding JE to code`)
 	const index = this.Members.indexOf(patchName);
