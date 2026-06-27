@@ -24,7 +24,7 @@
 *                                                                          *
 *   Author(s)     : Functor, Neo-Mind, CH.C (jchcc), Victor Hugo           *
 *   Created Date  : 2020-11-11                                             *
-*   Last Modified : 2026-06-11                                             *
+*   Last Modified : 2026-06-27                                             *
 *                                                                          *
 \**************************************************************************/
 
@@ -99,16 +99,12 @@ DecrAFDelay = function(_)
 	;
 
 	const addrs = Exe.FindHexN(code);
-	if (addrs.isEmpty())
-		throw Error("No delay comparisons found");
 
 	$$(_, 1.2, `Find the register movement before it to find the correct match`)
 	const movReg = MOV(reg, [POS3WC]); //mov regA, dword ptr [<&WINMM.timeGetTime>] ; regA is edi / ebx
-	const addr = addrs.find( memAddr =>
+	const addr = addrs.isEmpty() ? null : addrs.find( memAddr =>
 		Exe.FindLastHex(movReg, memAddr, memAddr - 0x20) > 0
 	);
-	if (!addr)
-		throw Error("No matches found");
 
 	$$(_, 2.1, `Get the new value from the user`)
 	const varName = '$followDelay';
@@ -117,7 +113,27 @@ DecrAFDelay = function(_)
 		Cancel("Delay", 1000);
 
 	$$(_, 2.2, `Replace the old value`)
-	Exe.SetFromVar(addr + code.byteCount() - 4, varName);
+	if (addr)
+	{
+		Exe.SetFromVar(addr + code.byteCount() - 4, varName);
+		return true;
+	}
+
+	$$(_, 3.1, `Find newer direct timeGetTime delay comparisons`)
+	const codeNew =
+		CALL([POS4WC])       //call dword ptr [<&WINMM.timeGetTime>]
+	+	MOV(EDX, EAX)       //mov edx, eax
+	+	SUB(EDX, [R32, POS4WC])
+	+	CMP(EDX, 0x3E8)     //cmp edx, 3E8h ; 1000ms
+	;
+
+	const addrsNew = Exe.FindHexN(codeNew);
+	if (addrsNew.isEmpty())
+		throw Error("No matches found");
+
+	$$(_, 3.2, `Replace all newer auto-follow delay values`)
+	for (const addrNew of addrsNew)
+		Exe.SetFromVar(addrNew + codeNew.byteCount() - 4, varName);
 
 	return true;
 };
