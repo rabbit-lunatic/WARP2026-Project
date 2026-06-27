@@ -22,9 +22,10 @@
 *                                                                          *
 |**************************************************************************|
 *                                                                          *
-*   Author(s)     : Ai4rei/AN, Shinryo, Andrei (4144), X-EcutiOnner        *
+*   Author(s)     : Ai4rei/AN, Shinryo, Andrei (4144), X-EcutiOnner,       *
+*                    Victor Hugo                                           *
 *   Created Date  : 2020-11-10                                             *
-*   Last Modified : 2023-08-26                                             *
+*   Last Modified : 2026-06-27                                             *
 *                                                                          *
 \**************************************************************************/
 
@@ -34,15 +35,23 @@
 NoEarthQuake = function(_)
 {
 	$$(_, 1.1, `Find the string '.BMP' or '.png'`)
-	let sufAddr = Exe.FindText(".BMP", CASE_INSENSITIVE);
-
-	if (sufAddr < 0 && Exe.BuildDate > 20180000)
+	let sufAddr = -1;
+	if (Exe.BuildDate >= 20250700)
 	{
-		sufAddr = Exe.FindText(".BMP", false);
+		sufAddr = Exe.FindText(".png");
 	}
-	if (sufAddr < 0 && Exe.BuildDate > 20180000)
+	else
 	{
-		sufAddr = Exe.FindText(".png", CASE_INSENSITIVE);
+		sufAddr = Exe.FindText(".BMP", CASE_INSENSITIVE);
+
+		if (sufAddr < 0 && Exe.BuildDate > 20180000)
+		{
+			sufAddr = Exe.FindText(".BMP", false);
+		}
+		if (sufAddr < 0 && Exe.BuildDate > 20180000)
+		{
+			sufAddr = Exe.FindText(".png", CASE_INSENSITIVE);
+		}
 	}
 
 	if (sufAddr < 0)
