@@ -40,19 +40,19 @@ ResizeHealthBar:
         - ResizeNormalBar:
             title : Resize Normal mob HP bar
             recommend : no
-            author : CH.C (jchcc) , Neo-Mind
+            author : CH.C (jchcc) , Neo-Mind, Victor Hugo
             desc : Resize the HP bar drawn for regular monsters as per user specified value.
         
         - ResizeMiniBossBar:
             title : Resize Mini-Boss mob HP bar
             recommend : no
-            author : CH.C (jchcc) , Neo-Mind
+            author : CH.C (jchcc) , Neo-Mind, Victor Hugo
             desc : Resize the HP bar drawn for Mini-Boss monsters as per user specified value.
         
         - ResizeBossBar:
             title : Resize Boss mob HP bar
             recommend : no
-            author : CH.C (jchcc) , Neo-Mind
+            author : CH.C (jchcc) , Neo-Mind, Victor Hugo
             desc : Resize the HP bar drawn for Boss monsters as per user specified value.
 
         - AllianceChatHotkeySelector:

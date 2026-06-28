@@ -20,9 +20,9 @@
 *                                                                          *
 |**************************************************************************|
 *                                                                          *
-*   Author(s)     : CH.C (jchcc), Neo-Mind                                 *
+*   Author(s)     : CH.C (jchcc), Neo-Mind, Victor Hugo                    *
 *   Created Date  : 2020-11-12                                             *
-*   Last Modified : 2024-08-08                                             *
+*   Last Modified : 2026-06-28                                             *
 *                                                                          *
 \**************************************************************************/
 
@@ -104,28 +104,35 @@ ResizeMobBar.stage = function(patchName)
 		[bossW, bossH]
 	] = this.Members.map(name => CACHE.entry(cacheKey, name));
 
-	const parts =
-	[//0
-		CMP(BYTE_PTR, MBAR.MobType, 2)  //cmp byte ptr [regC + mobType], 2  OR  cmp regC, 2
-	+	JNE(Filler(1,1))                //jne _checkMini
-	+	PUSH(bossH)                     //push <bossHeight>
+	const bossBody =
+		PUSH(bossH)                     //push <bossHeight>
 	+	PUSH(bossW)                     //push <bossWidth>
 	+	MBAR.MovECX                     //mov ecx, regA
-	+	JMP(Filler(3))                  //jmp <retnAddr>
-
-	,//1
-		CMP(BYTE_PTR, MBAR.MobType, 1)  //cmp byte ptr [regC + mobType], 1  OR  cmp regC, 1 ; _checkMini
-	+	JNE(Filler(2,1))                //jne _isNormal
-	+	PUSH(miniBossH)                 //push <miniBossHeight>
+	+	JMP(Filler(3));                 //jmp <retnAddr>
+	const miniBossBody =
+		PUSH(miniBossH)                 //push <miniBossHeight>
 	+	PUSH(miniBossW)                 //push <miniBossWidth>
 	+	MBAR.MovECX                     //mov ecx, regA
-	+	JMP(Filler(3))                  //jmp <retnAddr>
-
-	,//2
+	+	JMP(Filler(3));                 //jmp <retnAddr>
+	const normBody =
 		PUSH(normH)                     //push <normalHeight> ; _isNormal
 	+	PUSH(normW)                     //push <normalWidth>
 	+	MBAR.MovECX                     //mov ecx, regA
-	+	JMP(Filler(3))                  //jmp <retnAddr>
+	+	JMP(Filler(3));                 //jmp <retnAddr>
+
+	const parts =
+	[//0
+		CMP(BYTE_PTR, MBAR.MobType, 2)  //cmp byte ptr [regC + mobType], 2  OR  cmp regC, 2
+	+	JNE(bossBody.byteCount())       //jne _checkMini
+	+	bossBody
+
+	,//1
+		CMP(BYTE_PTR, MBAR.MobType, 1)  //cmp byte ptr [regC + mobType], 1  OR  cmp regC, 1 ; _checkMini
+	+	JNE(miniBossBody.byteCount())   //jne _isNormal
+	+	miniBossBody
+
+	,//2
+		normBody
 	];
 
 	$$(_, 1.2, `Activate the tag`)
@@ -135,12 +142,9 @@ ResizeMobBar.stage = function(patchName)
 	const [free, freeVir] = CACHE.allocate(cacheKey, 'TblBuilder', parts, 0x10);
 
 	$$(_, 2.2, `Fill in the blanks`)
-	const [,_checkMini, _isNormal] = MapAddrs(freeVir, parts);
-	const code = SetFillTargets( parts,
+	const code = SetFillTargets(parts,
 	{
 		start : freeVir,
-		'1,1' : _checkMini,
-		'2,1' : _isNormal,
 		 3    : MBAR.RetnAddr
 	});
 
