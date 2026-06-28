@@ -20,9 +20,9 @@
 *                                                                          *
 |**************************************************************************|
 *                                                                          *
-*   Author(s)     : Neo-Mind                                               *
+*   Author(s)     : Neo-Mind, Victor Hugo                                  *
 *   Created Date  : 2021-08-22                                             *
-*   Last Modified : 2024-08-01                                             *
+*   Last Modified : 2026-06-28                                             *
 *                                                                          *
 \**************************************************************************/
 
@@ -44,6 +44,7 @@ export var OvrdSize;
 export var RetnAddr;
 export var MobType;
 export var MovECX;
+export var DirectSites;
 
 export const Tag = 'MobBar';
 
@@ -67,6 +68,7 @@ export function init()
 	RetnAddr = -1;
 	MobType = null;
 	MovECX = '';
+	DirectSites = null;
 
 	Valid = null;
 	ErrMsg = null;
@@ -147,6 +149,20 @@ export function load()
 
 		$$(_, 3.2, `Save the ECX assignment`)
 		MovECX = MOV(ECX, EAX);
+
+		$$(_, 3.25, `Try to find separate mob HP bar sites used by newer clients`)
+		DirectSites = findDirectSites();
+		if (DirectSites)
+		{
+			Mode = 3;
+			Sizes = [
+				[0x3C, 0x5],
+				[0x3C, 0x5],
+				[0x3C, 0x5]
+			];
+
+			return Log.rise(Valid = true);
+		}
 
 		$$(_, 3.3, `Find the size PUSHes (the pattern matches multiple times)`)
 		let parts =
@@ -253,4 +269,89 @@ export function debug()
 		Info("}");
 		return true;
 	}
+}
+
+///
+/// \brief Locate the split HP bar creation sites present in 2023+ clients.
+///
+function findDirectSites()
+{
+	const normalSite = findNormalSite();
+	const miniBossSite = findSpecialSite(0x0E);
+	const bossSite = findSpecialSite(0x0D);
+
+	if (!normalSite || !miniBossSite || !bossSite)
+		return null;
+
+	return MakeMap(
+		'ResizeNormalBar', normalSite,
+		'ResizeMiniBossBar', miniBossSite,
+		'ResizeBossBar', bossSite
+	);
+}
+
+///
+/// \brief Find normal mob bar creation. New clients skip this path for type 0D/0E mobs.
+///
+function findNormalSite()
+{
+	const anchor =
+		"8A [10000...] 14 03 00 00" //mov al, byte ptr [reg + 314h]
+	+	" 3C 0D"                    //cmp al, 0Dh
+	+	" 0F 84 ?? ?? ?? ??"        //je _skip
+	+	" 3C 0E"                    //cmp al, 0Eh
+	+	" 0F 84 ?? ?? ?? ??"        //je _skip
+	;
+
+	const anchorAddr = Exe.FindHex(anchor);
+	if (anchorAddr < 0)
+		return null;
+
+	const site =
+		"8B C8"                     //mov ecx, eax
+	+	" 6A 05"                    //push 5
+	+	" 6A 3C"                    //push 3Ch
+	+	" 89 [10...111] ?? ?? 00 00"//mov dword ptr [reg + barPtr], eax
+	+	" E8"                       //call <make bar>
+	;
+
+	const hookAddr = Exe.FindHex(site, anchorAddr, anchorAddr + 0x90);
+	if (hookAddr < 0)
+		return null;
+
+	return {
+		HookAddr: hookAddr,
+		OvrdSize: 6,
+		RetnAddr: Exe.Phy2Vir(hookAddr + 6),
+		Prefix: MovECX
+	};
+}
+
+///
+/// \brief Find special mob bar creation by the type written to the bar object.
+///
+function findSpecialSite(type)
+{
+	const site =
+		"6A 05"                    //push 5
+	+	" 6A 3C"                   //push 3Ch
+	+	" E8 ?? ?? ?? ??"          //call <make bar>
+	+	" 8B [10000...] ?? ?? 00 00"//mov eax, dword ptr [reg + barPtr]
+	+	" C7 80 9C 00 00 00 " + type.toHex(4) //mov dword ptr [eax + 9Ch], <type>
+	;
+
+	const pushAddr = Exe.FindHex(site);
+	if (pushAddr < 0)
+		return null;
+
+	const movAddr = Exe.FindLastHex("8B [10001...] ?? ?? 00 00", pushAddr, pushAddr - 0x10);
+	if (movAddr < 0)
+		return null;
+
+	return {
+		HookAddr: movAddr,
+		OvrdSize: (pushAddr + 4) - movAddr,
+		RetnAddr: Exe.Phy2Vir(pushAddr + 4),
+		Prefix: Instr.FromAddr(movAddr)
+	};
 }

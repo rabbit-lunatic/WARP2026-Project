@@ -96,6 +96,9 @@ ResizeMobBar.stage = function(patchName)
 {
 	const _ = `${patchName}.stage : `;
 
+	if (MBAR.Mode === 3)
+		return this.stageDirect(patchName);
+
 	$$(_, 1.1, `Construct our code`)
 	const cacheKey = 'MBAR';
 	const [
@@ -153,6 +156,54 @@ ResizeMobBar.stage = function(patchName)
 
 	$$(_, 2.4, `Setup a JMP to it at hook address`)
 	Exe.SetJMP(MBAR.HookAddr, freeVir, MBAR.OvrdSize - 5); //NOPs at the end to keep it clean.
+};
+
+///
+/// \brief Helper function to stage split HP bar sites used by newer clients.
+///
+ResizeMobBar.stageDirect = function(patchName)
+{
+	const _ = `${patchName}.stageDirect : `;
+
+	const push32 = val =>
+		" 68" + val.toHex(4);
+
+	$$(_, 1.1, `Construct direct site code`)
+	const cacheKey = 'MBAR';
+	const sizes = new Map(this.Members.map(name => [name, CACHE.entry(cacheKey, name)]));
+
+	$$(_, 1.2, `Activate the tag`)
+	Exe.BeginTag(CACHE.getTag(cacheKey));
+
+	for (const name of this.Members)
+	{
+		const site = MBAR.DirectSites.get(name);
+		const [wid, hgt] = sizes.get(name);
+
+		const parts =
+		[
+			site.Prefix                    //preserve original ecx assignment
+		+	push32(hgt)                    //push <height>
+		+	push32(wid)                    //push <width>
+		+	JMP(Filler(1))                 //jmp <retnAddr>
+		];
+
+		$$(_, 2.1, `Allocate direct site code for ${name}`)
+		const [free, freeVir] = CACHE.allocate(cacheKey, `Direct_${name}`, parts[0], 0x10);
+
+		$$(_, 2.2, `Fill direct site code for ${name}`)
+		const code = SetFillTargets(parts,
+		{
+			start : freeVir,
+			 1    : site.RetnAddr
+		});
+
+		$$(_, 2.3, `Add direct site code for ${name}`)
+		Exe.SetHex(free, code);
+
+		$$(_, 2.4, `Setup direct site JMP for ${name}`)
+		Exe.SetJMP(site.HookAddr, freeVir, site.OvrdSize - 5);
+	}
 };
 
 ///
