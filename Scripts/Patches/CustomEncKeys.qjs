@@ -313,16 +313,22 @@ CustomEncKeys.obfuscateDirectSend = function(patchName)
 	+	ADD(ECX, 2)            //add ecx, 2
 	+	CMP(ECX, EDI)          //cmp ecx, edi
 	+	JL(Filler(4,1))        //jl short _loop
-	+	MOV(ECX, [Filler(12)]) //mov ecx, dword ptr [cryptState]
+	+	CMP(AX, 0x0436)        //cmp ax, PACKET_CZ_ENTER2 ; first map-server packet starts a new obfuscation stream
+	+	JNE(Filler(7,1))       //jne short _sameStream
+	+	XOR(ECX, ECX)          //xor ecx, ecx
+	+	MOV([Filler(12)], ECX) //mov dword ptr [cryptState], ecx
+
+	,//2
+		MOV(ECX, [Filler(12)]) //mov ecx, dword ptr [cryptState] ; _sameStream
 	+	TEST(ECX, ECX)         //test ecx, ecx
 	+	JNE(Filler(5,1))       //jne short _crypt
 
-	,//2
+	,//3
 		MOV(ECX, newKeys[0])        //mov ecx, <key1> ; _init
 	+	IMUL(ECX, ECX, newKeys[1])  //imul ecx, ecx, <key2>
 	+	ADD(ECX, newKeys[2])        //add ecx, <key3>
 
-	,//3
+	,//4
 		MOV(EDX, ECX)               //mov edx, ecx ; _crypt
 	+	SHR(EDX, 0x10)              //shr edx, 10h
 	+	AND(EDX, 0x7FFF)            //and edx, 7FFFh
@@ -332,17 +338,17 @@ CustomEncKeys.obfuscateDirectSend = function(patchName)
 	+	ADD(ECX, newKeys[2])        //add ecx, <key3>
 	+	MOV([Filler(12)], ECX)      //mov dword ptr [cryptState], ecx
 
-	,//4
+	,//5
 		POPAD                       //popad ; _exit
 	+	JMP(Filler(6))              //jmp original function after copied prologue
 
-	,//5
+	,//6
 		" 00 00 00 00"              //cryptState
 	+	tblHex
 	];
 
 	$$(_, 1.3, `Resolve the local offsets`)
-	const [, _loop, _init, _crypt, _exit, cryptState] = MapAddrs(parts);
+	const [, _loop, _sameStream, _init, _crypt, _exit, cryptState] = MapAddrs(parts);
 	const tblStart = cryptState + 4;
 	const tblEnd = tblStart + tbl.length * 2;
 
@@ -361,6 +367,7 @@ CustomEncKeys.obfuscateDirectSend = function(patchName)
 		'3,1' : freeVir + _exit,
 		'4,1' : freeVir + _loop,
 		'5,1' : freeVir + _crypt,
+		'7,1' : freeVir + _sameStream,
 		6 : PACKET.KeySetter + 8
 	});
 	code = SwapFillers(code,
