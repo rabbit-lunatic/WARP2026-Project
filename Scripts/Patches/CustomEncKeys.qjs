@@ -23,7 +23,7 @@
 *                                                                          *
 *   Author(s)     : Shakto, Neo-Mind, Victor Hugo                          *
 *   Created Date  : 2020-11-08                                             *
-*   Last Modified : 2026-06-11                                             *
+*   Last Modified : 2026-06-30                                             *
 *                                                                          *
 \**************************************************************************/
 
@@ -51,6 +51,10 @@ CustomEncKeys = function(_)
 	if (newKey === false || newKey === oldKey)
 		Cancel("No new key specified");
 
+	const keyVal = this.normalizeInput(newKey);
+	if (keyVal === oldKey)
+		Cancel("No new key specified");
+
 	if (PACKET.KS_Type === PACKET.Pusher) //Direct PUSHes
 	{
 		$$(_, 2.1, `For Direct Key PUSHes, find all locations where it occurs`)
@@ -64,7 +68,7 @@ CustomEncKeys = function(_)
 
 		$$(_, 2.2, `Update the respective PUSHed key with the new one in all such locations`)
 		for (const addr of Exe.FindHexN(code))
-			Exe.SetFromVar(addr + csize - 5*(index + 1), varName);
+			Exe.SetInt32(addr + csize - 5*(index + 1), keyVal);
 
 		return true;
 	}
@@ -76,7 +80,7 @@ CustomEncKeys = function(_)
 		{
 			if (ins.Disp === 4*(index+1))
 			{
-				Exe.SetFromVar(ins.NextAddr - 4, varName);
+				Exe.SetInt32(ins.NextAddr - 4, keyVal);
 				break;
 			}
 		}
@@ -88,13 +92,29 @@ CustomEncKeys = function(_)
 		const cacheKey = 'PACKET';
 		CACHE.load(cacheKey, this.Members, PACKET.Keys);
 
-		$$(_, 3.2, `Set the key for the patch`)
-		const keyVal = (typeof newKey === 'string') ? parseInt(newKey, 16) : newKey;
+	$$(_, 3.2, `Set the key for the patch`)
 		CACHE.setEntry(cacheKey, _, keyVal);
 
 		$$(_, 3.3, `Run the helper function to make the changes in client`)
 		return this.obfuscate(_);
 	}
+};
+
+///
+/// \brief Convert D_Hex input to the packet key integer.
+///        WARP can restore numeric-only hex input as a number, so parse the
+///        displayed digits as hexadecimal instead of treating them as decimal.
+///
+CustomEncKeys.normalizeInput = function(value)
+{
+	if (value === false)
+		return false;
+
+	const text = String(value).trim().replace(/^0x/i, '');
+	if (!/^[0-9a-f]+$/i.test(text))
+		Cancel("Invalid packet key specified");
+
+	return parseInt(text, 16) >>> 0;
 };
 
 ///
