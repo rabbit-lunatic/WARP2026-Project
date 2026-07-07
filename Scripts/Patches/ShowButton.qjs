@@ -20,9 +20,9 @@
 *                                                                          *
 |**************************************************************************|
 *                                                                          *
-*   Author(s)     : Neo-Mind                                               *
+*   Author(s)     : Neo-Mind, Victor Hugo                                  *
 *   Created Date  : 2020-11-10                                             *
-*   Last Modified : 2024-08-09                                             *
+*   Last Modified : 2026-07-07                                             *
 *                                                                          *
 \**************************************************************************/
 
@@ -221,45 +221,76 @@ ShowReplayBtn = function(_)
     const a = Exe.FindHex("C7 45 C8 " + s.toHex());
     if (a < 0) throw Error("replay btn string assignment (usage) not found");
 
-    $$( _, "1.1", "Set [ebp-18] = 4 (button coord)");
+    $$( _, "1.1", "Set replay button coordinate");
     Exe.SetHex(a + 0x34, "C7 45 E8 04 00 00 00");
 
-    $$( _, "1.2", "Force enable replay (JNE→JMP)");
+    $$( _, "1.2", "Force enable replay button");
     Exe.SetHex(a + 0x72, "EB");
 
-    $$( _, "2.1", "Locate push 2729h");
-    let pushVA = Exe.FindHex("68 29 27 00 00 FF 50 18");
+    $$( _, "2.1", "Locate replay launch packet id");
+    const pushVA = Exe.FindHex("68 29 27 00 00 FF 50 18");
     if (pushVA < 0)
         throw Error("push 2729h not found");
-    let retnVA = pushVA + 5;
 
-    $$( _, "2.2", "00BFC810");
-	let sigVA = Exe.FindHex(
-		"E9 ?? ?? ?? ?? 55 8B EC 6A FF 68 ?? ?? ?? ?? 64 A1 00 00 00 00 50 A1 ?? ?? ?? ?? 33 C5 50"
-	);
-	if (sigVA < 0)
-		throw Error("Replay hook pattern not found");
+    const retnVA = pushVA + 5;
 
-	// JMP +5 → 55 위치 (00BFC810)
-	let tgtFunc = Exe.Phy2Vir(sigVA + 5, CODE);
+    $$( _, "2.2", "Locate replay reset helper");
+    let tgtFunc = -1;
+    const sigVA = Exe.FindHex(
+        "E9 ?? ?? ?? ?? 55 8B EC 6A FF 68 ?? ?? ?? ?? 64 A1 00 00 00 00 50 A1 ?? ?? ?? ?? 33 C5 50"
+    );
+    if (sigVA >= 0)
+    {
+        tgtFunc = Exe.Phy2Vir(sigVA + 5, CODE);
+    }
+    else
+    {
+        const helperRef = Exe.FindHex("E8 ?? ?? ?? ?? C6 40 6C 00 E8 ?? ?? ?? ??");
+        if (helperRef < 0)
+            throw Error("Replay hook pattern not found");
 
-    $$( _, "3.1", "Build hook stub");
-    let code =
+        tgtFunc = Exe.GetTgtAddr(helperRef + 1, PHYSICAL);
+    }
+
+    $$( _, "3.1", "Build replay hook stub");
+    const code =
         PUSHAD +
-        CALL(Filler(1)) +        // call 00BFC810
-        MOV([EAX, 0x6C], 0) +    // [eax+6C] = 0
+        CALL(Filler(1)) +
+        MOV([EAX, 0x6C], 0) +
         POPAD +
-        PUSH(0x2722) +           // push 2722h
-        JMP(Filler(2));          // jmp back
+        PUSH(0x2722) +
+        JMP(Filler(2));
 
-    const args = {
-        targets : {
-            1 : tgtFunc,                   // 00BFC810
-            2 : Exe.Phy2Vir(retnVA, CODE)  // return addr
+    AutoHook(pushVA, code,
+    {
+        targets :
+        {
+            1 : tgtFunc,
+            2 : Exe.Phy2Vir(retnVA, CODE)
         }
-    };
+    });
 
-    AutoHook(pushVA, code, args);
+    $$( _, "4.1", "Restore replay list helper prologue");
+    const disabledHelper = Exe.FindHex(
+        "C3 8B EC 6A FF 68 ?? ?? ?? ?? "
+    +   "64 A1 00 00 00 00 "
+    +   "50 B8 C0 13 00 00 "
+    +   "E8 ?? ?? ?? ?? "
+    +   "A1 ?? ?? ?? ?? "
+    +   "33 C5 "
+    +   "89 45 F0 "
+    +   "53 56 57 50 "
+    +   "8D 45 F4 "
+    +   "64 A3 00 00 00 00 "
+    +   "C7 45 FC 00 00 00 00 "
+    +   "B9 01 00 00 00 "
+    +   "8B 5D 08 "
+    +   "8B 55 10"
+    );
+    if (disabledHelper < 0)
+        throw Error("Disabled replay list helper prologue not found");
+
+    Exe.SetUint8(disabledHelper, 0x55);
 
     return true;
 };
