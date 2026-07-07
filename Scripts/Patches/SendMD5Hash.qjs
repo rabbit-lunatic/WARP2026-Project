@@ -23,7 +23,7 @@
 *                                                                          *
 *   Author(s)     : GreenBox, Neo-Mind, Victor Hugo                        *
 *   Created Date  : 2020-11-12                                             *
-*   Last Modified : 2026-06-11                                             *
+*   Last Modified : 2026-07-06                                             *
 *                                                                          *
 \**************************************************************************/
 
@@ -61,10 +61,10 @@ SendMD5Hash = function(_)
 	$$(_, 2.1, `Set the starting addr as the beginning of CODE section`)
 	let addr = Exe.GetSectBegin(CODE);
 
-	if (Exe.BuildDate >= 20250000 && Exe.FindHex(patterns[0], addr) < 0)
+	if (Exe.BuildDate >= 20250000)
 	{
-		$$(_, 2.2, `Latest clients no longer use the old LangType gated MD5 hash check`)
-		return true;
+		$$(_, 2.2, `Latest clients use the direct-send login path; stage direct-send hash packet`)
+		return this.directSend(_);
 	}
 
 	patterns.forEach( (pat, idx) =>
@@ -86,5 +86,167 @@ SendMD5Hash = function(_)
 		addr = Exe.GetTgtAddr(addr + 1, PHYSICAL, 1);
 	});
 
+	return true;
+};
+
+///
+/// \brief Recent clients no longer expose the old LangType-gated MD5 sender.
+///        Stage a packet 0x0204 for the shared DirectSend hook instead.
+///
+SendMD5Hash.directSend = function(_)
+{
+	$$(_, 3.1, `Ensure the PACKET object has been loaded`)
+	try { PACKET.load(); } catch (e) {}
+
+	$$(_, 3.2, `Get the 16-byte client hash expected by login-server`)
+	const rawHash = Exe.GetUserInput(
+		"$clientMD5Hash",
+		D_Text,
+		"Client MD5 Hash",
+		"Enter the 32 hex characters configured in login_athena.conf client_hash",
+		"00000000000000000000000000000000",
+		{minLen: 32, maxLen: 32, saveDefault: true}
+	);
+	const hashHex = this.normalizeHash(rawHash);
+
+	$$(_, 3.3, `Store packet 0x0204 for the shared DirectSend hook`)
+	CACHE.put("SendMD5Hash.PacketHex", "04 02 " + hashHex);
+
+	if (PACKET.KS_Type === PACKET.DirectSend)
+	{
+		$$(_, 3.4, `Rebuild shared DirectSend hook with MD5 support`)
+		return CustomEncKeys.obfuscateDirectSend(_);
+	}
+
+	$$(_, 3.4, `Install standalone DirectSend MD5 hook`)
+	return this.installDirectSendHook(_);
+};
+
+///
+/// \brief Validate and convert a 32-character MD5 string to spaced hex bytes.
+///
+SendMD5Hash.normalizeHash = function(value)
+{
+	const text = String(value).trim().replace(/^0x/i, '').replace(/[^0-9a-f]/gi, '');
+	if (!/^[0-9a-f]{32}$/i.test(text))
+		Cancel("Invalid client MD5 hash specified");
+
+	return text.match(/../g).join(' ');
+};
+
+///
+/// \brief Find the recent DirectSend function without relying on packet-key detection.
+///
+SendMD5Hash.findDirectSend = function()
+{
+	const thunk =
+		JMP(POS4WC)
+	+	NOP.repeat(10)
+	;
+	const sendTarget =
+		PUSH(EBP)
+	+	MOV(EBP, ESP)
+	+	PUSH(EBX)
+	+	PUSH(ESI)
+	+	PUSH(EDI)
+	+	MOV(EDI, ECX)
+	+	CALL([POS4WC])
+	+	CMP([EDI, 4], -1)
+	;
+
+	const matches = [];
+	for (const thunkAddr of Exe.FindHexN(thunk))
+	{
+		const tgt = Exe.GetTgtAddr(thunkAddr + 1, PHYSICAL);
+		if (Exe.FindHex(sendTarget, tgt, tgt + sendTarget.byteCount()) === tgt)
+			matches.push(tgt);
+	}
+
+	if (matches.length !== 1)
+		throw Error(`DirectSend target expected 1 hit, found ${matches.length}`);
+
+	return matches[0];
+};
+
+///
+/// \brief Standalone DirectSend hook which sends packet 0x0204 before login auth packets.
+///
+SendMD5Hash.installDirectSendHook = function(_)
+{
+	const hookAddr = this.findDirectSend();
+	const hookRetVir = Exe.Phy2Vir(hookAddr + 8, CODE);
+	const md5PacketHex = CACHE.get("SendMD5Hash.PacketHex");
+	const loginPackets = [0x64, 0x277, 0x2b0, 0x27c, 0x825];
+	const checks =
+		loginPackets.map(v => CMP(AX, v) + JE(Filler(3,1))).join('')
+	+	JMP(Filler(4,1))
+	;
+	const helper =
+		PUSH(EBP)
+	+	MOV(EBP, ESP)
+	+	PUSH(EBX)
+	+	PUSH(ESI)
+	+	PUSH(EDI)
+	+	MOV(EDI, ECX)
+	+	JMP(Filler(7))
+	;
+	const parts =
+	[//0
+		PUSH(EBP)
+	+	MOV(EBP, ESP)
+	+	PUSH(EBX)
+	+	PUSH(ESI)
+	+	PUSH(EDI)
+	+	MOV(EDI, ECX)
+	+	PUSHAD
+	+	CMP([EBP, 0x8], 2)
+	+	JL(Filler(1,1))
+	+	MOV(ESI, [EBP, 0xC])
+	+	TEST(ESI, ESI)
+	+	JE(Filler(2,1))
+	+	MOV(AX, [ESI])
+
+	,//1
+		checks
+
+	,//2
+		PUSH(Filler(5))
+	+	PUSH(18)
+	+	MOV(ECX, EDI)
+	+	CALL(Filler(6))
+
+	,//3
+		POPAD
+	+	JMP(Filler(7))
+
+	,//4
+		md5PacketHex
+	+	helper
+	];
+
+	const [, _checks, _send, _exit, dataStart] = MapAddrs(parts);
+	const packetStart = dataStart;
+	const helperStart = packetStart + md5PacketHex.byteCount();
+
+	Exe.BeginTag("SendMD5Hash");
+
+	const [free, freeVir] = Exe.Allocate(parts.byteCount(), 0x10);
+	let code = SetFillTargets(parts,
+	{
+		start : freeVir,
+		'1,1' : freeVir + _exit,
+		'2,1' : freeVir + _exit,
+		'3,1' : freeVir + _send,
+		'4,1' : freeVir + _exit,
+		6 : freeVir + helperStart,
+		7 : hookRetVir
+	});
+	code = SwapFillers(code,
+	{
+		5 : freeVir + packetStart
+	});
+
+	Exe.SetHex(free, code);
+	Exe.SetJMP(hookAddr, freeVir, 3);
 	return true;
 };

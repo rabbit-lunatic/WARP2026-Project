@@ -20,9 +20,9 @@
 #                                                                          #
 ############################################################################
 #                                                                          #
-#   Author(s)     : Neo-Mind                                               #
+#   Author(s)     : Neo-Mind, Victor Hugo                                  #
 #   Created Date  : 2020-08-26                                             #
-#   Last Modified : 2022-08-23                                             #
+#   Last Modified : 2026-07-06                                             #
 #                                                                          #
 ############################################################################
 
@@ -41,7 +41,7 @@ CustomNW:
         - SendMD5Hash:
             title : Send MD5 hash packet
             recommend : no
-            author : GreenBox , Neo-Mind
+            author : GreenBox , Neo-Mind, Victor Hugo
             desc : Makes the client send a packet with it's MD5 hash for all LangTypes. Only use if you have enabled it in your server.
         
         - NoNagle:
