@@ -1,0 +1,153 @@
+/**************************************************************************\
+*                                                                          *
+*   Copyright (C) 2026 Louis T Steinhil, Victor Hugo                       *
+*                                                                          *
+*   This file is a part of WARP project (specific to RO clients)           *
+*                                                                          *
+*   WARP is free software: you can redistribute it and/or modify           *
+*   it under the terms of the GNU General Public License as published by   *
+*   the Free Software Foundation, either version 3 of the License, or      *
+*   (at your option) any later version.                                    *
+*                                                                          *
+*   WARP is distributed in the hope that it will be useful,                *
+*   but WITHOUT ANY WARRANTY; without even the implied warranty of         *
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the          *
+*   GNU General Public License for more details.                           *
+*                                                                          *
+|**************************************************************************|
+*                                                                          *
+*   Author(s)     : Louis T Steinhil, Victor Hugo                          *
+*   Created Date  : 2026-07-04                                             *
+*   Last Modified : 2026-07-13                                             *
+*                                                                          *
+*   Description   : Overrides the native multibyte codepage through        *
+*                   semantic signatures. No runtime hook, DLL import, or   *
+*                   fixed virtual address is used.                         *
+*                                                                          *
+\**************************************************************************/
+
+CustomCodePage = function(_)
+{
+	const codePage = CustomCodePage.getCodePage();
+	if (codePage < 0)
+		return true;
+
+	if (!Number.isInteger(codePage) || codePage > 65001)
+		throw Error("CustomCodePage: invalid codepage");
+
+	// Preserve the 2025-07 behavior: UTF-8 does not replace _setmbcp(949).
+	if (codePage !== 65001)
+		CustomCodePage.patchSetMbcp(codePage);
+
+	CustomCodePage.patchCharsetMapper(codePage);
+	const globalInfo = CustomCodePage.patchGlobalAssignments(codePage);
+
+	if (typeof PatchDiagnostics !== "undefined" &&
+		typeof PatchDiagnostics.add === "function")
+		PatchDiagnostics.add('CustomCodePage', {
+			codePage,
+			globalCodePage: globalInfo.Global,
+			assignmentCount: globalInfo.Count
+		});
+
+	return true;
+};
+
+CustomCodePage.getCodePage = function()
+{
+	const codePage = Exe.GetUserInput(
+		'$customCodePage',
+		D_Int32,
+		"Client Code Page",
+		"Enter the codepage to force for multibyte text conversion. Use 65001 for UTF-8, or -1 to leave the client unchanged.",
+		65001,
+		{min: -1, max: 65001, saveDefault: true}
+	);
+
+	if (codePage === false)
+		Cancel("Codepage override disabled");
+
+	return Number(codePage);
+};
+
+CustomCodePage.patchSetMbcp = function(codePage)
+{
+	const setMbcp = Exe.FindFunc("_setmbcp", "ucrtbase.dll");
+	if (setMbcp < 0)
+		throw Error("CustomCodePage: _setmbcp import not found");
+
+	const code =
+		PUSH(949)
+	+	CALL([setMbcp])
+	+	" 33 F6 83 C4 04 33 FF 39 75 18";
+	const sites = Exe.FindHexN(1, 1, code);
+	if (sites.length !== 1)
+		throw Error(`CustomCodePage: expected one _setmbcp(949) site, found ${sites.length}`);
+
+	Exe.SetUint32(sites[0] + 1, codePage);
+};
+
+CustomCodePage.patchCharsetMapper = function(codePage)
+{
+	const mapper =
+		"55 8B EC"                         //push ebp; mov ebp, esp
+	+	" 8B 45 08"                       //mov eax, dword ptr [ebp + 8]
+	+	" 83 C0 80"                       //add eax, -80h
+	+	" 83 F8 6E"                       //cmp eax, 6Eh
+	+	" 77 ??"                          //ja default
+	+	" 0F B6 80 ?? ?? ?? ??"           //movzx eax, byte ptr [eax + table]
+	+	" FF 24 85 ?? ?? ?? ??"           //jmp dword ptr [eax*4 + table]
+	+	" B8 A4 03 00 00 5D C3"           //return 932
+	+	" B8 B5 03 00 00 5D C3";          //return 949
+
+	const sites = Exe.FindHexN(1, 1, mapper);
+	if (sites.length !== 1)
+		throw Error(`CustomCodePage: expected one charset mapper, found ${sites.length}`);
+
+	Exe.SetHex(sites[0], "B8 " + codePage.toHex(4) + " C3");
+};
+
+CustomCodePage.patchGlobalAssignments = function(codePage)
+{
+	const firstCases =
+		"C6 05 ?? ?? ?? ?? 00"           //langtype case 0 charset
+	+	" C7 05 ?? ?? ?? ?? B5 03 00 00"//g_codepage = 949
+	+	" E9 ?? ?? ?? ??"
+	+	" C6 05 ?? ?? ?? ?? 02"          //langtype case 2 charset
+	+	" C7 05 ?? ?? ?? ?? A4 03 00 00";//g_codepage = 932
+
+	const anchors = Exe.FindHexN(1, 1, firstCases);
+	if (anchors.length !== 1)
+		throw Error(`CustomCodePage: expected one langtype switch anchor, found ${anchors.length}`);
+
+	const firstAssignment = anchors[0] + 7;
+	const secondAssignment = firstAssignment + 0x16;
+	const globalCodePage = Exe.GetUint32(firstAssignment + 2);
+	if (Exe.GetUint32(secondAssignment + 2) !== globalCodePage)
+		throw Error("CustomCodePage: langtype cases do not write the same codepage global");
+
+	const assignmentPattern =
+		"C7 05 " + globalCodePage.toHex(4) + " ?? ?? ?? ??";
+	const assignments = Exe.FindHexN(13, 13, assignmentPattern);
+	if (assignments.length !== 13)
+		throw Error(`CustomCodePage: expected 13 global assignments, found ${assignments.length}`);
+
+	const originalValues = [
+		949, 932, 936, 950, 874, 0, 0,
+		1252, 1251, 1258, 1145, 1256, 0
+	];
+	for (let i = 0; i < assignments.length; ++i)
+	{
+		const original = Exe.GetUint32(assignments[i] + 6);
+		if (original !== originalValues[i])
+			throw Error(`CustomCodePage: unexpected original value ${original} at assignment ${i}`);
+	}
+
+	for (const addr of assignments)
+		Exe.SetUint32(addr + 6, codePage);
+
+	return {Global: globalCodePage, Count: assignments.length};
+};
+
+CustomCodePage.validate = () =>
+	Exe.BuildDate >= 20250716;

@@ -22,7 +22,7 @@
 *                                                                          *
 *   Author(s)     : Neo-Mind, Victor Hugo                                  *
 *   Created Date  : 2021-08-22                                             *
-*   Last Modified : 2026-06-28                                             *
+*   Last Modified : 2026-07-13                                             *
 *                                                                          *
 \**************************************************************************/
 
@@ -44,7 +44,6 @@ export var OvrdSize;
 export var RetnAddr;
 export var MobType;
 export var MovECX;
-export var DirectSites;
 
 export const Tag = 'MobBar';
 
@@ -68,7 +67,6 @@ export function init()
 	RetnAddr = -1;
 	MobType = null;
 	MovECX = '';
-	DirectSites = null;
 
 	Valid = null;
 	ErrMsg = null;
@@ -150,17 +148,15 @@ export function load()
 		$$(_, 3.2, `Save the ECX assignment`)
 		MovECX = MOV(ECX, EAX);
 
-		$$(_, 3.25, `Try to find separate mob HP bar sites used by newer clients`)
-		DirectSites = findDirectSites();
-		if (DirectSites)
+		$$(_, 3.25, `Try the shared UIMonsterGage creation path used by 2026 clients`)
+		const modernSite = findModernMonsterGageSite();
+		if (modernSite)
 		{
-			Mode = 3;
-			Sizes = [
-				[0x3C, 0x5],
-				[0x3C, 0x5],
-				[0x3C, 0x5]
-			];
-
+			HookAddr = modernSite.HookAddr;
+			OvrdSize = modernSite.OvrdSize;
+			RetnAddr = modernSite.RetnAddr;
+			MobType = modernSite.MobType;
+			MovECX = modernSite.Preserved;
 			return Log.rise(Valid = true);
 		}
 
@@ -272,86 +268,74 @@ export function debug()
 }
 
 ///
-/// \brief Locate the split HP bar creation sites present in 2023+ clients.
+/// \brief Locate the shared UIMonsterGage size assignment used by 2026 clients.
 ///
-function findDirectSites()
+/// The visible mob bar is stored at actor+300h and its category byte is the
+/// adjacent actor+304h field (2=boss, 1=mini-boss, otherwise normal). Two
+/// compiler layouts are supported: setup-before-store (2026-01-07) and
+/// store-before-setup (2026-07-03+).
+///
+function findModernMonsterGageSite()
 {
-	const normalSite = findNormalSite();
-	const miniBossSite = findSpecialSite(0x0E);
-	const bossSite = findSpecialSite(0x0D);
+	const variants =
+	[
+		{//2026-01-07: setup first, then store the real gauge at actor+300h
+			Code:
+				"8B C8"                       //mov ecx, eax
+			+	" 6A 05"                      //push 5 (height)
+			+	" 6A 3C"                      //push 60 (width)
+			+	" 89 [10000...] 00 03 00 00"  //mov dword ptr [actor + 300h], eax
+			+	" E8 ?? ?? ?? ??"             //call <make bar>
+			+	" FF [10110...] 00 03 00 00"  //push dword ptr [actor + 300h]
+			+	" B9 ?? ?? ?? ??"             //mov ecx, <manager>
+			+	" E8 ?? ?? ?? ??"             //call <register bar>
+			+	" 8B [10001...] 00 03 00 00", //mov ecx, dword ptr [actor + 300h]
+			HookOffset: 0,
+			StoreOffset: 6
+		},
+		{//2026-07-03+: store first, then dereference and set up the dimensions
+			Code:
+				"89 [10000...] 00 03 00 00"  //mov dword ptr [actor + 300h], eax
+			+	" 8B 00"                     //mov eax, dword ptr [eax]
+			+	" 6A 05"                     //push 5 (height)
+			+	" 6A 3C"                     //push 60 (width)
+			+	" 8B B0 B4 00 00 00"         //mov esi, dword ptr [eax + 0B4h]
+			+	" 8B CE"                     //mov ecx, esi
+			+	" FF 15 ?? ?? ?? ??"         //CFG indirect-call guard
+			+	" 8B 8D ?? ?? FF FF"         //mov ecx, dword ptr [localBar]
+			+	" FF D6"                     //call esi
+			+	" FF [10110...] 00 03 00 00",//push dword ptr [actor + 300h]
+			HookOffset: 6,
+			StoreOffset: 0
+		}
+	];
 
-	if (!normalSite || !miniBossSite || !bossSite)
+	let match = null;
+	for (const variant of variants)
+	{
+		const hits = Exe.FindHexN(variant.Code);
+		if (hits.length > 1 || (hits.length === 1 && match !== null))
+			return null;
+
+		if (hits.length === 1)
+			match = [hits[0], variant];
+	}
+
+	if (match === null)
 		return null;
 
-	return MakeMap(
-		'ResizeNormalBar', normalSite,
-		'ResizeMiniBossBar', miniBossSite,
-		'ResizeBossBar', bossSite
-	);
-}
-
-///
-/// \brief Find normal mob bar creation. New clients skip this path for type 0D/0E mobs.
-///
-function findNormalSite()
-{
-	const anchor =
-		"8A [10000...] 14 03 00 00" //mov al, byte ptr [reg + 314h]
-	+	" 3C 0D"                    //cmp al, 0Dh
-	+	" 0F 84 ?? ?? ?? ??"        //je _skip
-	+	" 3C 0E"                    //cmp al, 0Eh
-	+	" 0F 84 ?? ?? ?? ??"        //je _skip
-	;
-
-	const anchorAddr = Exe.FindHex(anchor);
-	if (anchorAddr < 0)
-		return null;
-
-	const site =
-		"8B C8"                     //mov ecx, eax
-	+	" 6A 05"                    //push 5
-	+	" 6A 3C"                    //push 3Ch
-	+	" 89 [10...111] ?? ?? 00 00"//mov dword ptr [reg + barPtr], eax
-	+	" E8"                       //call <make bar>
-	;
-
-	const hookAddr = Exe.FindHex(site, anchorAddr, anchorAddr + 0x90);
-	if (hookAddr < 0)
-		return null;
+	const [baseAddr, variant] = match;
+	const storeAddr = baseAddr + variant.StoreOffset;
+	const hookAddr = baseAddr + variant.HookOffset;
+	const store = Instr.FromAddr(storeAddr);
+	const actorReg = store.MRM.getReg('M');
 
 	return {
 		HookAddr: hookAddr,
 		OvrdSize: 6,
 		RetnAddr: Exe.Phy2Vir(hookAddr + 6),
-		Prefix: MovECX
+		MobType: [actorReg, store.Disp + 4],
+		Preserved: Instr.FromAddr(hookAddr)
 	};
 }
 
-///
-/// \brief Find special mob bar creation by the type written to the bar object.
-///
-function findSpecialSite(type)
-{
-	const site =
-		"6A 05"                    //push 5
-	+	" 6A 3C"                   //push 3Ch
-	+	" E8 ?? ?? ?? ??"          //call <make bar>
-	+	" 8B [10000...] ?? ?? 00 00"//mov eax, dword ptr [reg + barPtr]
-	+	" C7 80 9C 00 00 00 " + type.toHex(4) //mov dword ptr [eax + 9Ch], <type>
-	;
-
-	const pushAddr = Exe.FindHex(site);
-	if (pushAddr < 0)
-		return null;
-
-	const movAddr = Exe.FindLastHex("8B [10001...] ?? ?? 00 00", pushAddr, pushAddr - 0x10);
-	if (movAddr < 0)
-		return null;
-
-	return {
-		HookAddr: movAddr,
-		OvrdSize: (pushAddr + 4) - movAddr,
-		RetnAddr: Exe.Phy2Vir(pushAddr + 4),
-		Prefix: Instr.FromAddr(movAddr)
-	};
-}

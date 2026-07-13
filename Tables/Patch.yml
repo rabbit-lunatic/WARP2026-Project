@@ -20,9 +20,9 @@
 #                                                                          #
 ############################################################################
 #                                                                          #
-#   Author(s)     : Neo-Mind                                               #
+#   Author(s)     : Neo-Mind, Victor Hugo                                  #
 #   Created Date  : 2021-08-19                                             #
-#   Last Modified : 2021-08-19                                             #
+#   Last Modified : 2026-07-13                                             #
 #                                                                          #
 ############################################################################
 
@@ -325,3 +325,4 @@
 351 : EnableNpcDialogueScrolling
 352 : HideItemba
 353 : EnableRandomOptionColors
+361 : CustomCodePage
