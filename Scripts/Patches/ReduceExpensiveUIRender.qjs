@@ -1,0 +1,621 @@
+/**************************************************************************\
+*                                                                          *
+*   Copyright (C) 2026 Louis T Steinhil                                    *
+*                                                                          *
+*   This file is a part of WARP project (specific to RO clients)           *
+*                                                                          *
+*   WARP is free software: you can redistribute it and/or modify           *
+*   it under the terms of the GNU General Public License as published by   *
+*   the Free Software Foundation, either version 3 of the License, or      *
+*   (at your option) any later version.                                    *
+*                                                                          *
+*   This program is distributed in the hope that it will be useful,        *
+*   but WITHOUT ANY WARRANTY; without even the implied warranty of         *
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the          *
+*   GNU General Public License for more details.                           *
+*                                                                          *
+*   You should have received a copy of the GNU General Public License      *
+*   along with this program.  If not, see <http://www.gnu.org/licenses/>.  *
+*                                                                          *
+*                                                                          *
+|**************************************************************************|
+*                                                                          *
+*   Author(s)     : Louis T Steinhil, Victor Hugo                          *
+*   Created Date  : 2026-07-02                                             *
+*   Last Modified : 2026-07-17                                             *
+*                                                                          *
+*   Description   : Gates the ALT+S Skill Tree repaint so its immediate-   *
+*                   mode grid is rebuilt only when render state changes.   *
+*                   Every client-specific location and object field is     *
+*                   resolved from semantic signatures.                     *
+*                                                                          *
+\**************************************************************************/
+
+///
+/// \brief Reduce idle ALT+S Skill Tree rendering without build hardcoding.
+///
+/// The patch finds UINewSkillListWnd::DrawContent from its semantic render
+/// tail, walks back to the containing function prologue, derives every state
+/// field from native code that consumes it, and locates the DrawContent vtable
+/// entry through a validated data xref. No build date, file size, VA, RVA, RAW
+/// offset, or version profile is used.
+///
+/// The generated gate calls the original DrawContent on the first frame and
+/// whenever dirty/tab/hover/scroll/points/size state changes. Idle frames keep
+/// the previous render nodes. WARP reads remain bound to the source snapshot,
+/// so final queued bytes are verified on the materialized output executable.
+///
+ReduceExpensiveUIRender = function(_)
+{
+	$$(_, 1, "Resolve Skill Tree render state from semantic signatures");
+	ReduceExpensiveUIRender.resolveSemanticTarget();
+
+	$$(_, 2, "Verify native avatar and skill-level rendering paths");
+	ReduceExpensiveUIRender.verifyNativeSkillTreeSites();
+
+	$$(_, 3, "Install and verify the Skill Tree repaint gate");
+	ReduceExpensiveUIRender.installSkillTreeRepaintGate();
+
+	return true;
+};
+
+ReduceExpensiveUIRender.patterns = {
+	tail:
+		"E8 ?? ?? ?? ?? 8B CE E8 ?? ?? ?? ?? C6 86 ?? ?? ?? ?? 00",
+	prologue:
+		"55 8B EC 6A FF 68 ?? ?? ?? ?? 64 A1 00 00 00 00 50 83 EC ??",
+	layout:
+		"8B 46 ?? 2B 86 ?? ?? ?? ?? 8B 8E ?? ?? ?? ?? 2B C1 " +
+		"68 FF FF FF 00 50 8B 46 ?? 2B C3",
+	points:
+		"8B BE ?? ?? ?? ?? 8D 45 ?? 6A 50 6A 00 50 89 7D ??",
+	skillPoint:
+		"83 3D ?? ?? ?? ?? 00 74 ??",
+	tabState:
+		"39 ?? ?? ?? ?? ?? 74 ?? 56 8B ?? C7 ?? ?? ?? ?? ?? FF FF FF FF " +
+		"89 ?? ?? ?? ?? ?? C6 ?? ?? ?? ?? ?? 01",
+	scrollClamp:
+		"8B ?? ?? ?? ?? ?? 85 ?? 79 ?? C7 ?? ?? ?? ?? ?? 00 00 00 00 33 ??",
+	avatar:
+		"F3 0F 2C C0 99 F7 FE ?? ?? 89 B5 24 FF FF FF 83 FE 03",
+	skillLevel:
+		"E8 ?? ?? ?? ?? 83 C4 04 83 BD 78 FF FF FF 00 " +
+		"0F 84 ?? ?? ?? ?? 84 C0 0F 84 ?? ?? ?? ??"
+};
+
+ReduceExpensiveUIRender.normalizeHex = function(hex)
+{
+	return hex.toLowerCase().replace(/\s+/g, "");
+};
+
+ReduceExpensiveUIRender.hexMatches = function(actual, expected)
+{
+	return ReduceExpensiveUIRender.normalizeHex(actual) ===
+		ReduceExpensiveUIRender.normalizeHex(expected);
+};
+
+ReduceExpensiveUIRender.patternSize = function(pattern)
+{
+	return pattern.trim().split(/\s+/).length;
+};
+
+ReduceExpensiveUIRender.byteAt = function(addr)
+{
+	return parseInt(Exe.GetHex(addr, 1), 16);
+};
+
+ReduceExpensiveUIRender.dwordHex = function(value)
+{
+	return value.toHex(4).trim();
+};
+
+ReduceExpensiveUIRender.bytesToHex = function(bytes)
+{
+	return bytes.map(function(value)
+	{
+		return (value & 0xFF).toString(16).padStart(2, "0");
+	}).join(" ");
+};
+
+ReduceExpensiveUIRender.findUnique = function(label, pattern)
+{
+	const hits = Exe.FindHexN(pattern);
+	if (hits.length !== 1)
+		throw Error(
+			"ReduceExpensiveUIRender: " + label +
+			" expected 1 semantic match, got " + hits.length
+		);
+	return hits[0];
+};
+
+ReduceExpensiveUIRender.findUniqueWithin = function(label, pattern, start, end)
+{
+	const hits = Exe.FindHexN(pattern).filter(function(addr)
+	{
+		return addr >= start && addr < end;
+	});
+	if (hits.length !== 1)
+		throw Error(
+			"ReduceExpensiveUIRender: " + label +
+			" expected 1 in-function match, got " + hits.length
+		);
+	return hits[0];
+};
+
+ReduceExpensiveUIRender.tryVir2PhyCode = function(virAddr)
+{
+	try
+	{
+		const phyAddr = Exe.Vir2Phy(virAddr, CODE);
+		return phyAddr >= 0 ? phyAddr : -1;
+	}
+	catch (e)
+	{
+		return -1;
+	}
+};
+
+ReduceExpensiveUIRender.tryVir2PhyAny = function(virAddr)
+{
+	try
+	{
+		const phyAddr = Exe.Vir2Phy(virAddr);
+		return phyAddr >= 0 ? phyAddr : -1;
+	}
+	catch (e)
+	{
+		return -1;
+	}
+};
+
+ReduceExpensiveUIRender.assertPatternAt = function(label, phyAddr, pattern)
+{
+	const expected = pattern.trim().split(/\s+/);
+	const actualText = Exe.GetHex(phyAddr, expected.length);
+	const actual = actualText.trim().split(/\s+/);
+	for (let idx = 0; idx < expected.length; ++idx)
+	{
+		if (expected[idx] !== "??" &&
+			expected[idx].toLowerCase() !== actual[idx].toLowerCase())
+			throw Error(
+				"ReduceExpensiveUIRender: " + label +
+				" mismatch at +0x" + idx.toString(16).toUpperCase() +
+				", got " + actualText
+			);
+	}
+};
+
+ReduceExpensiveUIRender.queueHexChecked = function(label, phyAddr, hex)
+{
+	if (phyAddr < 0 || ReduceExpensiveUIRender.normalizeHex(hex).length === 0 ||
+		(ReduceExpensiveUIRender.normalizeHex(hex).length & 1) !== 0)
+		throw Error("ReduceExpensiveUIRender: invalid queued write for " + label);
+	Exe.SetHex(phyAddr, hex);
+};
+
+ReduceExpensiveUIRender.resolveTabState = function(dirtyField)
+{
+	const addr = ReduceExpensiveUIRender.findUnique(
+		"tab/hover/dirty state transition",
+		ReduceExpensiveUIRender.patterns.tabState
+	);
+	const base = ReduceExpensiveUIRender.byteAt(addr + 1) & 7;
+	const expectedModRM = [
+		0xB0 | base,
+		0xC8 | base,
+		0x80 | base,
+		0xB0 | base,
+		0x80 | base
+	];
+	const actualModRM = [
+		ReduceExpensiveUIRender.byteAt(addr + 1),
+		ReduceExpensiveUIRender.byteAt(addr + 10),
+		ReduceExpensiveUIRender.byteAt(addr + 12),
+		ReduceExpensiveUIRender.byteAt(addr + 22),
+		ReduceExpensiveUIRender.byteAt(addr + 28)
+	];
+	for (let idx = 0; idx < expectedModRM.length; ++idx)
+	{
+		if (actualModRM[idx] !== expectedModRM[idx])
+			throw Error("ReduceExpensiveUIRender: inconsistent tab-state base register");
+	}
+
+	const tabA = Exe.GetUint32(addr + 2);
+	const hover = Exe.GetUint32(addr + 13);
+	const tabB = Exe.GetUint32(addr + 23);
+	const dirty = Exe.GetUint32(addr + 29);
+	if (tabA !== tabB)
+		throw Error("ReduceExpensiveUIRender: repeated tab field does not match");
+	if (dirty !== dirtyField)
+		throw Error("ReduceExpensiveUIRender: tab transition uses another dirty field");
+
+	return {hover: hover, tab: tabA};
+};
+
+ReduceExpensiveUIRender.resolveScrollState = function(dirtyField)
+{
+	const hits = Exe.FindHexN(ReduceExpensiveUIRender.patterns.scrollClamp);
+	const candidates = [];
+	const dirtyHex = ReduceExpensiveUIRender.dwordHex(dirtyField);
+
+	for (const addr of hits)
+	{
+		const scrollA = Exe.GetUint32(addr + 2);
+		const scrollB = Exe.GetUint32(addr + 12);
+		if (scrollA !== scrollB)
+			continue;
+
+		const firstModRM = ReduceExpensiveUIRender.byteAt(addr + 1);
+		const sourceReg = (firstModRM >> 3) & 7;
+		const baseReg = firstModRM & 7;
+		const selfRegister = 0xC0 | (sourceReg << 3) | sourceReg;
+		if (ReduceExpensiveUIRender.byteAt(addr + 7) !== selfRegister ||
+			ReduceExpensiveUIRender.byteAt(addr + 11) !== (0x80 | baseReg) ||
+			ReduceExpensiveUIRender.byteAt(addr + 21) !== selfRegister)
+			continue;
+
+		const localEnd = Math.min(addr + 0x100, Exe.FileSize);
+		const scrollHex = ReduceExpensiveUIRender.dwordHex(scrollA);
+		const writeAddr = Exe.FindHex(
+			"89 ?? " + scrollHex,
+			addr + ReduceExpensiveUIRender.patternSize(
+				ReduceExpensiveUIRender.patterns.scrollClamp
+			),
+			localEnd
+		);
+		const dirtyAddr = Exe.FindHex(
+			"C6 ?? " + dirtyHex + " 01",
+			addr,
+			localEnd
+		);
+		if (writeAddr < 0 || dirtyAddr < 0)
+			continue;
+		if ((ReduceExpensiveUIRender.byteAt(writeAddr + 1) & 7) !== baseReg ||
+			(ReduceExpensiveUIRender.byteAt(dirtyAddr + 1) & 7) !== baseReg)
+			continue;
+
+		candidates.push(scrollA);
+	}
+
+	if (candidates.length !== 1)
+		throw Error(
+			"ReduceExpensiveUIRender: scroll clamp expected 1 semantic match, got " +
+			candidates.length
+		);
+	return candidates[0];
+};
+
+ReduceExpensiveUIRender.isCodePointer = function(value)
+{
+	return value !== 0 && ReduceExpensiveUIRender.tryVir2PhyCode(value) >= 0;
+};
+
+ReduceExpensiveUIRender.resolveVtableSlot = function(drawVir)
+{
+	const hits = [];
+	const pointerPattern = ReduceExpensiveUIRender.dwordHex(drawVir);
+	let searchFrom = 0;
+	while (searchFrom < Exe.FileSize)
+	{
+		const addr = Exe.FindHex(pointerPattern, searchFrom, Exe.FileSize);
+		if (addr < 0)
+			break;
+		hits.push(addr);
+		searchFrom = addr + 1;
+	}
+	const candidates = hits.filter(function(addr)
+	{
+		if ((addr & 3) !== 0 || addr < 8 || addr + 8 >= Exe.FileSize)
+			return false;
+		if (Exe.GetUint32(addr) !== drawVir)
+			return false;
+		return ReduceExpensiveUIRender.isCodePointer(Exe.GetUint32(addr - 4)) &&
+			ReduceExpensiveUIRender.isCodePointer(Exe.GetUint32(addr + 4));
+	});
+	if (candidates.length !== 1)
+		throw Error(
+			"ReduceExpensiveUIRender: DrawContent vtable xref expected 1 match, got " +
+			candidates.length
+		);
+	return candidates[0];
+};
+
+ReduceExpensiveUIRender.resolveSemanticTarget = function()
+{
+	const tailPhy = ReduceExpensiveUIRender.findUnique(
+		"DrawContent grid/avatar/dirty tail",
+		ReduceExpensiveUIRender.patterns.tail
+	);
+	const dirtyInstructionPhy = tailPhy + 12;
+	const dirtyField = Exe.GetUint32(dirtyInstructionPhy + 2);
+
+	const precedingPrologues = Exe.FindHexN(
+		ReduceExpensiveUIRender.patterns.prologue
+	).filter(function(addr)
+	{
+		return addr < tailPhy;
+	});
+	if (precedingPrologues.length === 0)
+		throw Error("ReduceExpensiveUIRender: DrawContent prologue not found");
+	const drawPhy = precedingPrologues.reduce(function(best, addr)
+	{
+		return addr > best ? addr : best;
+	}, -1);
+	if (drawPhy < 0)
+		throw Error("ReduceExpensiveUIRender: invalid DrawContent RAW address");
+
+	const layoutPhy = ReduceExpensiveUIRender.findUniqueWithin(
+		"DrawContent width/height layout",
+		ReduceExpensiveUIRender.patterns.layout,
+		drawPhy,
+		tailPhy
+	);
+	const heightField = ReduceExpensiveUIRender.byteAt(layoutPhy + 2);
+	const widthField = ReduceExpensiveUIRender.byteAt(layoutPhy + 25);
+
+	const pointsPhy = ReduceExpensiveUIRender.findUniqueWithin(
+		"DrawContent points field",
+		ReduceExpensiveUIRender.patterns.points,
+		drawPhy,
+		tailPhy
+	);
+	const pointsField = Exe.GetUint32(pointsPhy + 2);
+
+	const skillPointPhy = ReduceExpensiveUIRender.findUniqueWithin(
+		"DrawContent skill-point global",
+		ReduceExpensiveUIRender.patterns.skillPoint,
+		drawPhy,
+		tailPhy
+	);
+	const skillPointLevelVir = Exe.GetUint32(skillPointPhy + 2);
+	if (ReduceExpensiveUIRender.tryVir2PhyAny(skillPointLevelVir) < 0)
+		throw Error("ReduceExpensiveUIRender: skill-point global is not mapped");
+
+	const tabState = ReduceExpensiveUIRender.resolveTabState(dirtyField);
+	const scrollField = ReduceExpensiveUIRender.resolveScrollState(dirtyField);
+	const drawVir = Exe.Phy2Vir(drawPhy, CODE);
+	const vtableSlotPhy = ReduceExpensiveUIRender.resolveVtableSlot(drawVir);
+	const vtableSlotVir = Exe.Phy2Vir(vtableSlotPhy);
+
+	const objectFields = [
+		widthField,
+		heightField,
+		tabState.hover,
+		tabState.tab,
+		scrollField,
+		pointsField,
+		dirtyField
+	];
+	if (objectFields.some(function(value) { return value <= 0; }) ||
+		new Set(objectFields).size !== objectFields.length)
+		throw Error("ReduceExpensiveUIRender: derived object fields are invalid or overlap");
+
+	const gate = ReduceExpensiveUIRender.gate;
+	gate.drawContentPhy = drawPhy;
+	gate.drawContentVir = drawVir;
+	gate.vtableSlotPhy = vtableSlotPhy;
+	gate.vtableSlotVir = vtableSlotVir;
+	gate.skillPointLevelVir = skillPointLevelVir;
+	gate.dirtyField = dirtyField;
+	gate.fields = [
+		{name: "width", object: widthField, state: gate.state.width},
+		{name: "height", object: heightField, state: gate.state.height},
+		{name: "hover", object: tabState.hover, state: gate.state.hover},
+		{name: "tab", object: tabState.tab, state: gate.state.tab},
+		{name: "scroll", object: scrollField, state: gate.state.scroll},
+		{name: "points", object: pointsField, state: gate.state.points}
+	];
+};
+
+ReduceExpensiveUIRender.verifyNativeSkillTreeSites = function()
+{
+	const avatarPhy = ReduceExpensiveUIRender.findUnique(
+		"native Skill Tree avatar frame",
+		ReduceExpensiveUIRender.patterns.avatar
+	);
+	const avatarBytes = Exe.GetHex(avatarPhy + 7, 2);
+	if (!ReduceExpensiveUIRender.hexMatches(avatarBytes, "8B F0"))
+		throw Error(
+			"ReduceExpensiveUIRender: animated avatar path is not native, got " +
+			avatarBytes
+		);
+
+	const skillLevelPhy = ReduceExpensiveUIRender.findUnique(
+		"native Skill Tree level-label path",
+		ReduceExpensiveUIRender.patterns.skillLevel
+	);
+	ReduceExpensiveUIRender.assertPatternAt(
+		"native Skill Tree level-label branch",
+		skillLevelPhy + 8,
+		"83 BD 78 FF FF FF 00 0F 84 ?? ?? ?? ??"
+	);
+};
+
+ReduceExpensiveUIRender.asm = function()
+{
+	const bytes = [];
+	const labels = {};
+	const fixups = [];
+	const put32 = function(out, pos, value)
+	{
+		const v = value >>> 0;
+		out[pos] = v & 0xFF;
+		out[pos + 1] = (v >>> 8) & 0xFF;
+		out[pos + 2] = (v >>> 16) & 0xFF;
+		out[pos + 3] = (v >>> 24) & 0xFF;
+	};
+
+	return {
+		bytes: bytes,
+		emit: function()
+		{
+			for (const value of arguments)
+				bytes.push(value & 0xFF);
+		},
+		dword: function(value)
+		{
+			const pos = bytes.length;
+			bytes.push(0, 0, 0, 0);
+			put32(bytes, pos, value);
+		},
+		label: function(name)
+		{
+			if (Object.prototype.hasOwnProperty.call(labels, name))
+				throw Error("ReduceExpensiveUIRender: duplicate label " + name);
+			labels[name] = bytes.length;
+		},
+		call: function(target)
+		{
+			bytes.push(0xE8);
+			const pos = bytes.length;
+			bytes.push(0, 0, 0, 0);
+			fixups.push({pos: pos, target: target});
+		},
+		jcc: function(opcode, target)
+		{
+			bytes.push(0x0F, opcode);
+			const pos = bytes.length;
+			bytes.push(0, 0, 0, 0);
+			fixups.push({pos: pos, target: target});
+		},
+		finish: function(baseVir)
+		{
+			const out = bytes.slice();
+			for (const fixup of fixups)
+			{
+				if (typeof fixup.target === "string" &&
+					!Object.prototype.hasOwnProperty.call(labels, fixup.target))
+					throw Error(
+						"ReduceExpensiveUIRender: unresolved label " + fixup.target
+					);
+				const targetVir = typeof fixup.target === "string"
+					? baseVir + labels[fixup.target]
+					: fixup.target;
+				put32(out, fixup.pos, targetVir - (baseVir + fixup.pos + 4));
+			}
+			return ReduceExpensiveUIRender.bytesToHex(out);
+		}
+	};
+};
+
+ReduceExpensiveUIRender.gate = {
+	drawContentPhy: -1,
+	drawContentVir: -1,
+	vtableSlotPhy: -1,
+	vtableSlotVir: -1,
+	skillPointLevelVir: -1,
+	dirtyField: -1,
+	fields: [],
+	stateSize: 0x24,
+	state: {
+		valid: 0x00,
+		self: 0x04,
+		width: 0x08,
+		height: 0x0C,
+		hover: 0x10,
+		tab: 0x14,
+		scroll: 0x18,
+		points: 0x1C,
+		skillPointLevel: 0x20
+	}
+};
+
+ReduceExpensiveUIRender.buildSkillTreeRepaintGate = function(stateVir)
+{
+	const gate = ReduceExpensiveUIRender.gate;
+	const a = ReduceExpensiveUIRender.asm();
+
+	a.emit(0x56, 0x8B, 0xF1);              // PUSH ESI / MOV ESI, ECX
+	a.emit(0x83, 0x3D); a.dword(stateVir + gate.state.valid); a.emit(0x00);
+	a.jcc(0x84, "paint");                   // First call always paints.
+	a.emit(0x3B, 0x35); a.dword(stateVir + gate.state.self);
+	a.jcc(0x85, "paint");                   // Recreated window.
+	a.emit(0x80, 0xBE); a.dword(gate.dirtyField); a.emit(0x00);
+	a.jcc(0x85, "paint");                   // Native dirty byte.
+
+	for (const field of gate.fields)
+	{
+		a.emit(0x8B, 0x86); a.dword(field.object);
+		a.emit(0x3B, 0x05); a.dword(stateVir + field.state);
+		a.jcc(0x85, "paint");
+	}
+
+	a.emit(0xA1); a.dword(gate.skillPointLevelVir);
+	a.emit(0x3B, 0x05); a.dword(stateVir + gate.state.skillPointLevel);
+	a.jcc(0x85, "paint");
+	a.emit(0x5E, 0xC3);                    // Retain prior render nodes.
+
+	a.label("paint");
+	a.emit(0x8B, 0xCE);
+	a.call(gate.drawContentVir);
+	a.emit(0x89, 0x35); a.dword(stateVir + gate.state.self);
+	for (const field of gate.fields)
+	{
+		a.emit(0x8B, 0x86); a.dword(field.object);
+		a.emit(0xA3); a.dword(stateVir + field.state);
+	}
+	a.emit(0xA1); a.dword(gate.skillPointLevelVir);
+	a.emit(0xA3); a.dword(stateVir + gate.state.skillPointLevel);
+	a.emit(0xC7, 0x05); a.dword(stateVir + gate.state.valid);
+	a.emit(0x01, 0x00, 0x00, 0x00);
+	a.emit(0x5E, 0xC3);
+
+	return a;
+};
+
+ReduceExpensiveUIRender.installSkillTreeRepaintGate = function()
+{
+	const gate = ReduceExpensiveUIRender.gate;
+	if (gate.drawContentVir < 0 || gate.vtableSlotPhy < 0 ||
+		gate.skillPointLevelVir < 0 || gate.dirtyField < 0 ||
+		gate.fields.length !== 6)
+		throw Error("ReduceExpensiveUIRender: semantic target was not resolved");
+
+	const currentDraw = Exe.GetUint32(gate.vtableSlotPhy);
+	if (currentDraw !== gate.drawContentVir)
+		throw Error(
+			"ReduceExpensiveUIRender: vtable changed before write, got 0x" +
+			currentDraw.toString(16).toUpperCase()
+		);
+
+	const allocation = Exe.Allocate(gate.stateSize, 4);
+	const statePhy = allocation[0];
+	const stateVir = allocation[1];
+	const zeroState = "00 ".repeat(gate.stateSize).trim();
+	ReduceExpensiveUIRender.queueHexChecked(
+		"repaint state",
+		statePhy,
+		zeroState
+	);
+
+	const code = ReduceExpensiveUIRender.buildSkillTreeRepaintGate(stateVir);
+	const codeAllocation = Exe.Allocate(code.bytes.length, 0x10);
+	const codePhy = codeAllocation[0];
+	const codeVir = codeAllocation[1];
+	const codeHex = code.finish(codeVir);
+	ReduceExpensiveUIRender.queueHexChecked(
+		"repaint gate code",
+		codePhy,
+		codeHex
+	);
+
+	ReduceExpensiveUIRender.queueHexChecked(
+		"DrawContent vtable pointer",
+		gate.vtableSlotPhy,
+		ReduceExpensiveUIRender.dwordHex(codeVir)
+	);
+};
+
+ReduceExpensiveUIRender.validate = function()
+{
+	try
+	{
+		ReduceExpensiveUIRender.resolveSemanticTarget();
+		ReduceExpensiveUIRender.verifyNativeSkillTreeSites();
+		return true;
+	}
+	catch (e)
+	{
+		return false;
+	}
+};

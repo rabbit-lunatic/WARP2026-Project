@@ -22,7 +22,7 @@
 #                                                                          #
 #   Author(s)     : Neo-Mind, Victor Hugo                                  #
 #   Created Date  : 2020-08-26                                             #
-#   Last Modified : 2026-07-13                                             #
+#   Last Modified : 2026-07-17                                             #
 #                                                                          #
 ############################################################################
 
@@ -229,6 +229,13 @@ CustomUI:
             recommend : no
             author : X-EcutiOnner
             desc : Remove equipment preview button on the items description window
+        
+        - ReduceExpensiveUIRender:
+            title : Reduce Expensive UI Rendering
+            recommend : no
+            author : Louis T Steinhil, Stingor, Victor Hugo
+            # Last Modified: 2026-07-17
+            desc : Repaints the ALT+S Skill Tree only when its tab, hover, scroll, points, size, or native dirty state changes, retaining the last render nodes on idle frames. Resolves all client locations from semantic signatures and verifies every final byte write.
         
         - HideZeroDateInGuildWin:
             title : Hide Zero Date in Guild Window
