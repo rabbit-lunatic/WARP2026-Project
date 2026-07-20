@@ -20,9 +20,9 @@
 #                                                                          #
 ############################################################################
 #                                                                          #
-#   Author(s)     : Neo-Mind, Victor Hugo                                  #
+#   Author(s)     : Neo-Mind, Victor Hugo, Skylove                         #
 #   Created Date  : 2021-08-19                                             #
-#   Last Modified : 2026-07-17                                             #
+#   Last Modified : 2026-07-19                                             #
 #                                                                          #
 ############################################################################
 
@@ -327,3 +327,4 @@
 353 : EnableRandomOptionColors
 359 : ReduceExpensiveUIRender
 361 : CustomCodePage
+365 : AlignMenuText

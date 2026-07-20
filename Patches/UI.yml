@@ -20,9 +20,9 @@
 #                                                                          #
 ############################################################################
 #                                                                          #
-#   Author(s)     : Neo-Mind, Victor Hugo                                  #
+#   Author(s)     : Neo-Mind, Victor Hugo, Skylove                         #
 #   Created Date  : 2020-08-26                                             #
-#   Last Modified : 2026-07-17                                             #
+#   Last Modified : 2026-07-19                                             #
 #                                                                          #
 ############################################################################
 
@@ -236,6 +236,13 @@ CustomUI:
             author : Louis T Steinhil, Stingor, Victor Hugo
             # Last Modified: 2026-07-17
             desc : Repaints the ALT+S Skill Tree only when its tab, hover, scroll, points, size, or native dirty state changes, retaining the last render nodes on idle frames. Resolves all client locations from semantic signatures and verifies every final byte write.
+
+        - AlignMenuText:
+            title : Align NPC Selection Menu Text
+            recommend : no
+            author : Skylove
+            # Last Modified: 2026-07-19
+            desc : Makes menu, select, and switch option text follow the horizontal alignment selected by setdialogalign. All client locations are resolved through unique semantic signatures.
         
         - HideZeroDateInGuildWin:
             title : Hide Zero Date in Guild Window
